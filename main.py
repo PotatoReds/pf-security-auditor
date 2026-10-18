@@ -1,11 +1,17 @@
-
+# Import libraries for system information, JSON, and timestamps.
 import platform
 import json
 from datetime import datetime, timezone
 
+# Import our scanner engine and Windows Firewall check.
+from core.scanner import Scanner
+from checks.firewall import check_firewall
 
+# Import our Windows antivirus detection check.
+from checks.antivirus import check_antivirus
+
+# Collect basic information about the operating system.
 def get_system_info():
-    """Collect basic information about the operating system."""
     return {
         "operating_system": platform.system(),
         "release": platform.release(),
@@ -13,18 +19,38 @@ def get_system_info():
     }
 
 
+# Main entry point for the Pathfinder application.
 def main():
     print("=== Pathfinder Security Auditor v0.1 ===")
 
+    # Create an instance of the scanner engine.
+    scanner = Scanner()
+
+    # Register the firewall check without executing it yet.
+    scanner.register(check_firewall)
+
+    # Register the antivirus check for execution.
+    scanner.register(check_antivirus)
+
+    # Execute all registered checks and collect their findings.
+    findings = scanner.run()
+
+    # Convert Finding objects into dictionaries for JSON serialization.
+    finding_results = [finding.to_dict() for finding in findings]
+
+    # Build the report using the collected security findings.
     report = {
         "scanner": "Pathfinder Internal Auditor",
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "system": get_system_info(),
-        "findings": [],
+        "findings": finding_results,
     }
 
+    # Convert the report to formatted JSON and display it.
     print(json.dumps(report, indent=4))
 
 
+# Only start Pathfinder when this file is executed directly.
+# This prevents main() from running automatically if imported elsewhere.
 if __name__ == "__main__":
     main()
