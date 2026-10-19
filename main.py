@@ -19,6 +19,24 @@ from checks.rdp import check_rdp
 # Import network reconnaissance functionality.
 from checks.network import check_network
 
+# Import the SMB security check for analysis.
+from checks.smb import check_smb
+
+# Import the user account security check.
+from checks.users import check_users
+
+# Import the User Account Control (UAC) security check.
+from checks.uac import check_uac
+
+# Import the shared folder security check.
+from checks.shares import check_shares
+
+# Import the BitLocker encryption check.
+from checks.bitlocker import check_bitlocker
+
+# Import the correlation engine to analyze findings.
+from core.correlator import correlate
+
 # Collect basic information about the operating system.
 def get_system_info():
     return {
@@ -47,8 +65,29 @@ def main():
     # Register the network reconnaissance check.
     scanner.register(check_network)
 
+    # Register the SMB security check for execution.
+    scanner.register(check_smb)
+
+    # Register the user account security check.
+    scanner.register(check_users)
+
+    # Register the User Account Control (UAC) security check.
+    scanner.register(check_uac)
+
+    # Register the shared folder security check.
+    scanner.register(check_shares)
+
+    # Register the BitLocker encryption check.
+    scanner.register(check_bitlocker)
+
     # Execute all registered checks and collect their findings.
     findings = scanner.run()
+
+    # Analyze relationships between independent security checks.
+    correlated_findings = correlate(findings)
+
+    # Include correlated risks in the final report.
+    findings.extend(correlated_findings)
 
     # Convert Finding objects into dictionaries for JSON serialization.
     finding_results = [finding.to_dict() for finding in findings]
