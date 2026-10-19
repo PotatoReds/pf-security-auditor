@@ -47,10 +47,19 @@ from core.reporter import save_report
 # compound security risks.
 from core.correlator import correlate
 
+# COR-002: Correlate listening TCP services with inbound
+# firewall rules, network addresses and active profiles.
+from core.firewall_policy_engine import correlate_firewall_policy
+
 # Baseline engine evaluates findings against security policies
 # defined in config/baseline.json.
 from core.baseline import evaluate_baseline
 
+# Finding is Pathfinder's common format for security results.
+from core.findings import Finding
+
+# Prioritize TCP exposure based on firewall rules, network
+from core.exposure_prioritizer import prioritize_exposure
 
 # ------------------------------------------------------------
 # WINDOWS SECURITY CHECKS
@@ -92,6 +101,12 @@ from checks.shares import check_shares
 
 # BL-001: Assess BitLocker encryption and protection status.
 from checks.bitlocker import check_bitlocker
+
+# Microsoft Defender configuration assessment.
+from checks.defender import check_defender
+
+# Network discovery check to identify network interfaces and addresses.
+from checks.network_discovery import check_network_discovery
 
 # ============================================================
 # FUNCTION: GET SYSTEM INFORMATION
@@ -157,6 +172,8 @@ def main() -> None:
     scanner.register(check_uac)
     scanner.register(check_shares)
     scanner.register(check_bitlocker)
+    scanner.register(check_defender)
+    scanner.register(check_network_discovery)
   
     # --------------------------------------------------------
     # STEP 2: EXECUTE SECURITY CHECKS
@@ -168,22 +185,89 @@ def main() -> None:
     # a failed check does not stop the entire assessment.
     findings = scanner.run()
 
-    # --------------------------------------------------------
-    # STEP 3: CORRELATE SECURITY FINDINGS
+ # --------------------------------------------------------
+    # STEP 3A: GENERAL SECURITY CORRELATIONS
     # --------------------------------------------------------
 
-    # The correlation engine evaluates relationships between
-    # findings that may indicate additional security risks.
-    #
-    # Example:
-    # SYS-001 identifies a portable computer.
-    # BL-001 identifies an unencrypted volume.
-    # COR-006 identifies the combined physical security risk.
-    correlated_findings = correlate(findings)
+    # Identify compound risks such as SMBv1 combined with
+    # listening SMB services, or unencrypted portable devices.
+    general_correlations = correlate(findings)
 
-    # Add correlated risks to the original findings.
-    # These become part of the final security report.
-    findings.extend(correlated_findings)
+    # Add the new findings to the overall assessment.
+    findings.extend(general_correlations)
+
+
+    # --------------------------------------------------------
+    # STEP 3B: FIREWALL POLICY CORRELATION (COR-002)
+    # --------------------------------------------------------
+
+    # Run the firewall correlation engine.
+    # It returns a dictionary containing its analysis.
+    firewall_result = correlate_firewall_policy(findings)
+
+    # Preserve the complete correlation result as JSON evidence.
+    # This includes endpoint classifications and supporting details.
+    firewall_evidence = json.dumps(
+        firewall_result,
+        ensure_ascii=False
+    )
+
+    # The engine uses COMPLETED/ERROR, whereas Pathfinder uses
+    # PASS/FAIL/WARN/ERROR. COMPLETED means analysis finished,
+    # not necessarily that every endpoint is secure.
+    engine_status = firewall_result.get("status")
+
+    if engine_status == "ERROR":
+        correlation_status = "ERROR"
+        correlation_severity = "MEDIUM"
+    else:
+        # A completed correlation is informational until the
+        # endpoint classifications have been evaluated.
+        correlation_status = "WARN"
+        correlation_severity = "INFO"
+
+    # Convert the dictionary into Pathfinder's Finding format.
+    firewall_finding = Finding(
+        check_id="COR-002",
+        title="Firewall policy and TCP exposure correlation",
+        status=correlation_status,
+        severity=correlation_severity,
+        description=firewall_result.get(
+            "description",
+            "Firewall correlation completed."
+        ),
+        evidence=firewall_evidence,
+        recommendation=(
+            "Review potentially exposed and indeterminate TCP "
+            "endpoints. Verify actual network reachability through "
+            "controlled testing before concluding that a service "
+            "is externally accessible."
+        )
+    )
+
+    # Append exactly one Finding object.
+    # Do not use extend() on the engine's dictionary.
+    findings.append(firewall_finding)
+
+    # NET-004 uses COR-002 evidence to prioritize endpoints
+    # without performing additional network scans.
+    try:
+        exposure_priority = prioritize_exposure(findings)
+        findings.append(exposure_priority)
+
+    except Exception as error:
+        # Keep the audit running if prioritization fails.
+        findings.append(
+            Finding(
+                check_id="NET-004",
+                title="Network exposure review prioritization",
+                status="ERROR",
+                severity="INFO",
+                description="Exposure prioritization could not be completed.",
+                evidence=f"{type(error).__name__}: {error}",
+                recommendation="Inspect COR-002 evidence and retry."
+            )
+        )
 
     # --------------------------------------------------------
     # STEP 4: EVALUATE SECURITY BASELINE

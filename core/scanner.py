@@ -1,56 +1,128 @@
-# Import Callable to describe functions that our scanner can execute.
+# ============================================================
+# PATHFINDER SECURITY AUDITOR
+# Module: Scanner
+#
+# Purpose:
+# Register and execute security checks independently.
+#
+# Error handling:
+# - One failed check must not stop the entire audit.
+# - Preserve the original check ID when a check fails.
+# - Record failures as Finding objects with status ERROR.
+# - Validate that checks return the expected Finding type.
+#
+# This module does not modify the audited system.
+# ============================================================
+
 from typing import Callable
 
-# Import our Finding class from core/findings.py.
 from core.findings import Finding
 
 
-# The Scanner class coordinates the execution of security checks.
 class Scanner:
+    """
+    Coordinates the execution of registered security checks.
 
-    # This method runs automatically when we create a Scanner object.
+    Each check must be a callable that returns a Finding object.
+    """
+
     def __init__(self):
 
-        # Store security-check functions in a list.
-        # Each function must return a Finding object.
+        # Store the registered check functions.
         self.checks: list[Callable[[], Finding]] = []
 
-
-    # Register a new security-check function with the scanner.
     def register(self, check: Callable[[], Finding]) -> None:
+        """
+        Register a security check for later execution.
+        """
 
-        # Add the function to our list without executing it yet.
         self.checks.append(check)
 
-
-    # Execute every registered security check.
     def run(self) -> list[Finding]:
+        """
+        Execute all registered checks.
 
-        # Create an empty list for the results.
-        findings = []
+        A failed check is converted into an ERROR Finding,
+        allowing the remaining checks to continue.
+        """
 
-        # Loop through all registered check functions.
+        findings: list[Finding] = []
+
         for check in self.checks:
 
+            # Use the check function's name for diagnostics.
+            check_name = getattr(check, "__name__", "unknown_check")
+
+            # Our checks follow the naming convention:
+            # check_firewall, check_network, etc.
+            #
+            # The actual check ID is normally defined inside
+            # the Finding returned by each check.
+            #
+            # If the check crashes before returning, Python
+            # cannot recover that ID automatically.
+            #
+            # We therefore maintain an explicit mapping.
+            check_ids = {
+                "check_system": "SYS-001",
+                "check_firewall": "FW-001",
+                "check_firewall_policy": "NET-002",
+                "check_antivirus": "AV-001",
+                "check_rdp": "RDP-001",
+                "check_network": "NET-001",
+                "check_exposure": "FW-002",
+                "check_smb": "SMB-001",
+                "check_users": "USR-001",
+                "check_uac": "UAC-001",
+                "check_shares": "SHARE-001",
+                "check_bitlocker": "BL-001",
+                "check_defender": "DEF-001",
+            }
+
+            # Resolve the expected ID before executing the check.
+            expected_check_id = check_ids.get(
+                check_name,
+                "SYS-ERROR"
+            )
+
             try:
-                # Execute the check and collect its result.
+                # Execute the security check.
                 finding = check()
+
+                # Reject invalid return values rather than
+                # silently adding them to the report.
+                if not isinstance(finding, Finding):
+                    raise TypeError(
+                        f"{check_name} returned "
+                        f"{type(finding).__name__}, expected Finding."
+                    )
+
                 findings.append(finding)
 
             except Exception as error:
-                # If one check crashes, record the error instead
-                # of stopping the entire security audit.
+
+                # Preserve the original check ID so the baseline
+                # can distinguish ERROR from NOT_ASSESSED.
                 findings.append(
                     Finding(
-                        check_id="SYS-ERROR",
-                        title="Security check execution failed",
+                        check_id=expected_check_id,
+                        title=f"Security check failed: {check_name}",
                         status="ERROR",
                         severity="INFO",
-                        description="A security check could not be completed.",
-                        evidence=f"{check.__name__}: {error}",
-                        recommendation="Investigate the failed security check."
+                        description=(
+                            "The security check could not be completed. "
+                            "Its security state remains unknown."
+                        ),
+                        evidence=(
+                            f"Check: {check_name}\n"
+                            f"Error type: {type(error).__name__}\n"
+                            f"Error message: {error}"
+                        ),
+                        recommendation=(
+                            "Investigate the execution error and "
+                            "rerun the security check."
+                        )
                     )
                 )
 
-        # Return all collected results to the caller.
         return findings
