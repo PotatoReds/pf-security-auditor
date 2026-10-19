@@ -91,4 +91,53 @@ def correlate(findings: list[Finding]) -> list[Finding]:
             # an unsupported security conclusion.
             pass
 
+    # COR-006: Unencrypted portable device
+    # Combine hardware classification with disk encryption status.
+    system = findings_by_id.get("SYS-001")
+    bitlocker = findings_by_id.get("BL-001")
+
+    if (
+        system is not None
+        and bitlocker is not None
+        and system.status == "PASS"
+        and bitlocker.status in ("WARN", "FAIL")
+    ):
+        try:
+            system_data = json.loads(system.evidence)
+            bitlocker_data = json.loads(bitlocker.evidence)
+
+            device_type = system_data["device_type"]
+            unprotected = bitlocker_data["unprotected_volumes"]
+
+            # Portable computers have increased physical theft exposure.
+            if (
+                device_type == "Portable"
+                and isinstance(unprotected, list)
+                and unprotected
+            ):
+                correlations.append(Finding(
+                    check_id="COR-006",
+                    title="Unencrypted portable device",
+                    status="FAIL",
+                    severity="HIGH",
+                    description=(
+                        "A portable Windows device has volumes without "
+                        "confirmed full encryption and active BitLocker "
+                        "protection. Loss or theft could expose stored data."
+                    ),
+                    evidence=json.dumps({
+                        "source_checks": ["SYS-001", "BL-001"],
+                        "device_type": device_type,
+                        "unprotected_volumes": unprotected
+                    }),
+                    recommendation=(
+                        "Review encryption requirements, enable BitLocker "
+                        "for sensitive volumes, and securely back up "
+                        "recovery keys."
+                    )
+                ))
+
+        except (ValueError, KeyError, TypeError):
+            pass
+
     return correlations

@@ -1,0 +1,36 @@
+{
+    "baseline_name": "Pathfinder Windows 11 Baseline",
+    "baseline_version": "0.1",
+    "rules": [
+        {
+            "check_id": "FW-001",
+            "required_status": "PASS",
+            "severity": "HIGH",
+            "description": "All Windows Firewall profiles must be enabled."
+        },
+        {
+            "check_id": "SMB-001",
+            "required_status": "PASS",
+            "severity": "HIGH",
+            "description": "SMBv1 server support must be disabled."
+        },
+        {
+            "check_id": "RDP-001",
+            "required_status": "PASS",
+            "severity": "HIGH",
+            "description": "Remote Desktop must be disabled or configured securely."
+        },
+        {
+            "check_id": "UAC-001",
+            "required_status": "PASS",
+            "severity": "MEDIUM",
+            "description": "User Account Control must be configured securely."
+        },
+        {
+            "check_id": "BL-001",
+            "required_status": "PASS",
+            "severity": "MEDIUM",
+            "description": "All assessed volumes must have active full-disk encryption."
+        }
+    ]
+}

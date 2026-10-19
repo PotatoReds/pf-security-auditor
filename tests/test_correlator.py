@@ -51,6 +51,41 @@ class TestCorrelator(unittest.TestCase):
         self.assertEqual(results[0].status, "FAIL")
         self.assertEqual(results[0].severity, "HIGH")
 
+    def test_unencrypted_portable_device(self):
+        # Simulate a laptop detected by SYS-001.
+        system = Finding(
+            check_id="SYS-001",
+            title="Device classification",
+            status="PASS",
+            severity="INFO",
+            description="Device classified as: Portable.",
+            evidence=json.dumps({
+                "device_type": "Portable"
+            }),
+            recommendation="Use classification for risk assessment."
+        )
 
+        # Simulate an unencrypted Windows drive.
+        bitlocker = Finding(
+            check_id="BL-001",
+            title="BitLocker volume encryption",
+            status="WARN",
+            severity="MEDIUM",
+            description="C: is unencrypted.",
+            evidence=json.dumps({
+                "unprotected_volumes": ["C:"]
+            }),
+            recommendation="Enable BitLocker."
+        )
+
+        # Correlate both findings.
+        results = correlate([system, bitlocker])
+
+        # Verify that Pathfinder identifies the increased risk.
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0].check_id, "COR-006")
+        self.assertEqual(results[0].status, "FAIL")
+        self.assertEqual(results[0].severity, "HIGH")
+        
 if __name__ == "__main__":
     unittest.main()
