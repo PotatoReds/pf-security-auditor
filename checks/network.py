@@ -1,13 +1,17 @@
+
 # ============================================================
 # PATHFINDER SECURITY AUDITOR
 # Module: NET-001 - Network Reconnaissance
 #
 # Purpose:
 # Identify listening TCP ports, their associated processes,
-# and potential network attack surfaces on Windows.
+# executable paths, and potential network attack surfaces.
 #
-# This module is READ-ONLY.
-# It does not modify firewall rules or network configuration.
+# The executable path can subsequently be correlated with
+# Windows Firewall application-specific rules.
+#
+# Security:
+# READ-ONLY. No firewall or network settings are modified.
 # ============================================================
 
 import subprocess
@@ -17,60 +21,149 @@ from core.findings import Finding
 
 
 def check_network() -> Finding:
+    """
+    Enumerate Windows TCP listeners and associated processes.
 
-    # --------------------------------------------------------
-    # STEP 1: Collect network information using PowerShell
-    # --------------------------------------------------------
+    Returns:
+        A Finding containing structured JSON evidence.
 
-    # Get-NetTCPConnection identifies listening TCP sockets.
-    #
-    # OwningProcess contains the process ID (PID).
-    # Get-Process attempts to resolve the PID to a process name.
-    #
-    # Some protected processes may not expose their names.
-    # In those cases, we record "Unknown".
-    #
-    # ConvertTo-Json produces structured output for Python.
-
-    command = """
-    Get-NetTCPConnection -State Listen -ErrorAction Stop |
-    ForEach-Object {
-
-        # Store the current TCP connection.
-        $connection = $_
-
-        # Default value if process identification fails.
-        $processName = "Unknown"
-
-        try {
-            # Resolve the process ID to a readable process name.
-            $processName = (Get-Process -Id $connection.OwningProcess -ErrorAction Stop).ProcessName
-        }
-        catch {
-            # A process may have terminated or be inaccessible.
-            $processName = "Unknown"
-        }
-
-        # Return a structured record for this TCP listener.
-        [PSCustomObject]@{
-            LocalAddress  = $connection.LocalAddress
-            LocalPort     = $connection.LocalPort
-            OwningProcess = $connection.OwningProcess
-            ProcessName   = $processName
-        }
-
-    } | ConvertTo-Json -Compress
+    Process names and executable paths may be unavailable
+    for protected processes or insufficient permissions.
+    Missing process information is not treated as proof
+    that a process or executable does not exist.
     """
 
     # --------------------------------------------------------
-    # STEP 2: Execute PowerShell and validate its output
+    # STEP 1: Collect network and process information
+    # --------------------------------------------------------
+
+    # Get-NetTCPConnection provides listening TCP sockets.
+    #
+    # Get-CimInstance Win32_Process provides process names
+    # and executable paths where Windows permits access.
+    #
+    # We first collect the TCP connections and then query
+    # each unique PID only once. This avoids repeated CIM
+    # queries for processes with multiple listening sockets.
+    #
+    # A missing executable path is represented as JSON null.
+    # It must not be interpreted as a path mismatch.
+
+    command = r"""
+    $ErrorActionPreference = "Stop"
+
+    # Collect all listening TCP sockets.
+    $listeners = @(
+        Get-NetTCPConnection -State Listen -ErrorAction Stop
+    )
+
+    # Build a lookup table containing process information.
+    $processCache = @{}
+
+    # Resolve each unique process ID only once.
+    $uniquePids = @(
+        $listeners |
+        Select-Object -ExpandProperty OwningProcess -Unique
+    )
+
+    foreach ($processId in $uniquePids) {
+
+        # Use a string key for consistent hashtable access.
+        $key = [string]$processId
+
+        # Default to unknown process information.
+        $processName = "Unknown"
+        $executablePath = $null
+
+        try {
+            # Query Windows Management Instrumentation
+            # for the process name and executable path.
+            $processInfo = Get-CimInstance Win32_Process `
+                -Filter "ProcessId = $processId" `
+                -ErrorAction Stop
+
+            if ($null -ne $processInfo) {
+
+                # Record the process name when available.
+                if (-not [string]::IsNullOrWhiteSpace(
+                    $processInfo.Name
+                )) {
+                    $processName = [string]$processInfo.Name
+                }
+
+                # Record the full executable path only
+                # when Windows actually provides it.
+                if (-not [string]::IsNullOrWhiteSpace(
+                    $processInfo.ExecutablePath
+                )) {
+                    $executablePath = [string](
+                        $processInfo.ExecutablePath
+                    )
+                }
+            }
+        }
+        catch {
+            # Protected or terminated processes may not
+            # expose their information through CIM.
+            #
+            # Continue without failing the entire scan.
+        }
+
+        # Fall back to Get-Process for the process name.
+        # This does not invent an executable path.
+        if ($processName -eq "Unknown") {
+
+            try {
+                $fallback = Get-Process `
+                    -Id $processId `
+                    -ErrorAction Stop
+
+                if ($null -ne $fallback) {
+                    $processName = [string]$fallback.ProcessName
+                }
+            }
+            catch {
+                # Preserve "Unknown" if access is denied.
+            }
+        }
+
+        # Store the resolved information for this PID.
+        $processCache[$key] = [PSCustomObject]@{
+            ProcessName    = $processName
+            ExecutablePath = $executablePath
+        }
+    }
+
+    # Build the structured TCP listener inventory.
+    $records = @(
+        foreach ($connection in $listeners) {
+
+            $key = [string]$connection.OwningProcess
+            $processInfo = $processCache[$key]
+
+            [PSCustomObject]@{
+                LocalAddress   = [string]$connection.LocalAddress
+                LocalPort      = [int]$connection.LocalPort
+                OwningProcess  = [int]$connection.OwningProcess
+                ProcessName    = [string]$processInfo.ProcessName
+                ExecutablePath = $processInfo.ExecutablePath
+            }
+        }
+    )
+
+    # Always serialize an array, including when there
+    # are zero or one listening TCP sockets.
+    ConvertTo-Json -InputObject $records -Depth 5 -Compress
+    """
+
+    # --------------------------------------------------------
+    # STEP 2: Execute PowerShell and parse the response
     # --------------------------------------------------------
 
     try:
 
-        # Execute PowerShell without loading user profiles.
-        # The timeout prevents a stalled command from
-        # blocking the entire security scan indefinitely.
+        # The additional CIM queries can take longer than
+        # the previous process-name-only implementation.
         result = subprocess.run(
             [
                 "powershell.exe",
@@ -81,47 +174,47 @@ def check_network() -> Finding:
             ],
             capture_output=True,
             text=True,
-            timeout=15
+            timeout=45
         )
 
-        # A nonzero return code means collection failed.
+        # A failed PowerShell command invalidates the
+        # network evidence collected by this check.
         if result.returncode != 0:
             raise RuntimeError(
-                result.stderr.strip() or
-                "PowerShell network enumeration failed."
+                result.stderr.strip()
+                or "PowerShell network enumeration failed."
             )
 
-        # Convert the JSON response into Python objects.
+        # Convert the PowerShell JSON output to Python.
         connections = json.loads(result.stdout)
 
-        # PowerShell can return one object instead of a list
-        # when exactly one TCP listener is found.
+        # Retain compatibility with single-object output.
         if isinstance(connections, dict):
             connections = [connections]
 
-        # An empty result may be represented by JSON null.
+        # Treat JSON null as an empty listener inventory.
         if connections is None:
             connections = []
 
-        # Reject unexpected data structures.
+        # Reject unexpected output formats.
         if not isinstance(connections, list):
             raise ValueError(
                 "Unexpected network data format."
             )
 
         # ----------------------------------------------------
-        # STEP 3: Validate every network connection
+        # STEP 3: Validate the collected network records
         # ----------------------------------------------------
 
         for connection in connections:
 
-            # Each connection must be a dictionary.
+            # Each listener must be represented as an object.
             if not isinstance(connection, dict):
                 raise ValueError(
                     "Invalid connection entry."
                 )
 
-            # The local IP address must be text.
+            # Validate the local listening address.
             if not isinstance(
                 connection.get("LocalAddress"), str
             ):
@@ -129,7 +222,7 @@ def check_network() -> Finding:
                     "Invalid local address."
                 )
 
-            # Port numbers must be integers from 1 to 65535.
+            # TCP port numbers must be between 1 and 65535.
             port = connection.get("LocalPort")
 
             if type(port) is not int or not (1 <= port <= 65535):
@@ -146,7 +239,6 @@ def check_network() -> Finding:
                 )
 
             # Process names must be strings.
-            # "Unknown" is acceptable if Windows restricts access.
             if not isinstance(
                 connection.get("ProcessName"), str
             ):
@@ -154,8 +246,23 @@ def check_network() -> Finding:
                     "Invalid process name."
                 )
 
+            # ExecutablePath may be a string or JSON null.
+            #
+            # Null means Windows did not provide the path.
+            # It is not evidence that the process is safe
+            # or that a firewall application rule excludes it.
+            executable_path = connection.get("ExecutablePath")
+
+            if (
+                executable_path is not None
+                and not isinstance(executable_path, str)
+            ):
+                raise ValueError(
+                    "Invalid executable path."
+                )
+
     # --------------------------------------------------------
-    # STEP 4: Handle collection and parsing errors
+    # STEP 4: Handle collection and validation errors
     # --------------------------------------------------------
 
     except (
@@ -166,16 +273,15 @@ def check_network() -> Finding:
         json.JSONDecodeError
     ) as error:
 
-        # A collection failure must never be reported as PASS.
-        # We cannot conclude the system is secure if evidence
-        # could not be collected or validated.
+        # Failed evidence collection must never become PASS.
         return Finding(
             check_id="NET-001",
             title="Listening TCP services",
             status="ERROR",
             severity="INFO",
             description=(
-                "Unable to reliably enumerate listening TCP services."
+                "Unable to reliably enumerate listening "
+                "TCP services and associated processes."
             ),
             evidence=str(error),
             recommendation=(
@@ -188,11 +294,11 @@ def check_network() -> Finding:
     # STEP 5: Identify potential network attack surfaces
     # --------------------------------------------------------
 
-    # These addresses mean a service is listening on all
-    # IPv4 or IPv6 interfaces respectively.
+    # Wildcard listeners bind to all IPv4 or IPv6
+    # interfaces respectively.
     #
-    # This does NOT prove that the service is reachable
-    # through Windows Firewall or from the internet.
+    # A wildcard listener does not prove that a remote
+    # computer can reach the listening service.
     wildcard_addresses = ("0.0.0.0", "::")
 
     wildcard_listeners = [
@@ -201,11 +307,10 @@ def check_network() -> Finding:
         if connection["LocalAddress"] in wildcard_addresses
     ]
 
-    # Identify listening ports commonly associated with
-    # remote administration or Windows network services.
+    # Ports commonly associated with network services
+    # and remote administration.
     #
-    # Port numbers are only indicators.
-    # They do not independently prove which service is running.
+    # These are indicators, not confirmed service identities.
     security_relevant_ports = {
         21: "FTP",
         22: "SSH",
@@ -218,7 +323,7 @@ def check_network() -> Finding:
         5986: "WinRM HTTPS"
     }
 
-    # Store security-relevant listeners separately.
+    # Keep noteworthy listeners in a separate inventory.
     interesting_listeners = []
 
     for connection in connections:
@@ -227,11 +332,11 @@ def check_network() -> Finding:
 
         if port in security_relevant_ports:
 
-            # Copy the original record so we do not alter
-            # the collected evidence.
+            # Copy the original record without changing it.
             interesting = connection.copy()
 
-            # Add the service commonly associated with the port.
+            # Add the service commonly associated with
+            # the port number.
             interesting["PossibleService"] = (
                 security_relevant_ports[port]
             )
@@ -239,14 +344,27 @@ def check_network() -> Finding:
             interesting_listeners.append(interesting)
 
     # --------------------------------------------------------
-    # STEP 6: Determine the security finding
+    # STEP 6: Measure process identification coverage
     # --------------------------------------------------------
 
-    # A wildcard listener represents a potentially broader
-    # attack surface than a loopback-only listener.
+    # Count listener records with available executable paths.
     #
-    # However, listening ports alone are not vulnerabilities.
-    # Therefore, we use WARN rather than FAIL.
+    # This measures evidence completeness rather than
+    # the number of distinct executable files.
+    identified_paths = sum(
+        1
+        for connection in connections
+        if connection["ExecutablePath"]
+    )
+
+    unidentified_paths = (
+        len(connections) - identified_paths
+    )
+
+    # --------------------------------------------------------
+    # STEP 7: Determine the security finding
+    # --------------------------------------------------------
+
     if wildcard_listeners:
 
         status = "WARN"
@@ -256,7 +374,9 @@ def check_network() -> Finding:
             f"Found {len(connections)} listening TCP sockets. "
             f"{len(wildcard_listeners)} are bound to all interfaces. "
             f"{len(interesting_listeners)} use ports commonly "
-            "associated with security-relevant services."
+            "associated with security-relevant services. "
+            f"Resolved executable paths for "
+            f"{identified_paths} listeners."
         )
 
     else:
@@ -266,25 +386,30 @@ def check_network() -> Finding:
 
         description = (
             f"Found {len(connections)} listening TCP sockets. "
-            "No wildcard-bound listeners were identified."
+            "No wildcard-bound listeners were identified. "
+            f"Resolved executable paths for "
+            f"{identified_paths} listeners."
         )
 
     # --------------------------------------------------------
-    # STEP 7: Prepare structured evidence
+    # STEP 8: Prepare structured JSON evidence
     # --------------------------------------------------------
 
-    # Separate the full inventory from noteworthy listeners.
-    # This will make the data easier to display in a future
-    # HTML report or graphical interface.
+    # Preserve the existing evidence structure.
+    #
+    # Add path coverage metrics and ExecutablePath fields
+    # without removing information used by other modules.
     evidence = {
         "total_listeners": len(connections),
         "wildcard_listeners": len(wildcard_listeners),
         "security_relevant_listeners": interesting_listeners,
-        "connections": connections
+        "connections": connections,
+        "executable_paths_identified": identified_paths,
+        "executable_paths_unavailable": unidentified_paths
     }
 
     # --------------------------------------------------------
-    # STEP 8: Return the security finding
+    # STEP 9: Return the security finding
     # --------------------------------------------------------
 
     return Finding(
@@ -295,9 +420,10 @@ def check_network() -> Finding:
         description=description,
         evidence=json.dumps(evidence, indent=4),
         recommendation=(
-            "Review listening services and their owning processes. "
-            "Disable unnecessary services, restrict network access "
-            "using Windows Firewall, and investigate exposed "
-            "remote administration protocols."
+            "Review listening services and their owning "
+            "processes. Disable unnecessary services, "
+            "restrict network access using Windows Firewall, "
+            "and investigate exposed remote administration "
+            "protocols."
         )
     )
