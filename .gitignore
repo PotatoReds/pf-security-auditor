@@ -222,3 +222,6 @@ __marimo__/
 # Pathfinder security scan reports
 reports/*
 !reports/.gitkeep
+
+# Ignore generated security reports.
+reports/*.json

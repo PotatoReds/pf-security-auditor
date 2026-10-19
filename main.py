@@ -10,6 +10,15 @@ from checks.firewall import check_firewall
 # Import our Windows antivirus detection check.
 from checks.antivirus import check_antivirus
 
+# Import our JSON report export function.
+from core.reporter import save_report
+
+# Import our new Remote Desktop security check.
+from checks.rdp import check_rdp
+
+# Import network reconnaissance functionality.
+from checks.network import check_network
+
 # Collect basic information about the operating system.
 def get_system_info():
     return {
@@ -32,6 +41,12 @@ def main():
     # Register the antivirus check for execution.
     scanner.register(check_antivirus)
 
+    # Register the RDP security check with the scanner.
+    scanner.register(check_rdp)
+
+    # Register the network reconnaissance check.
+    scanner.register(check_network)
+
     # Execute all registered checks and collect their findings.
     findings = scanner.run()
 
@@ -48,6 +63,12 @@ def main():
 
     # Convert the report to formatted JSON and display it.
     print(json.dumps(report, indent=4))
+
+    # Save the same report to the reports directory.
+    report_path = save_report(report)
+
+    # Show the user where the report was saved.
+    print(f"\nReport saved to: {report_path}")
 
 
 # Only start Pathfinder when this file is executed directly.
