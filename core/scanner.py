@@ -77,6 +77,9 @@ class Scanner:
                 "check_shares": "SHARE-001",
                 "check_bitlocker": "BL-001",
                 "check_defender": "DEF-001",
+                "check_network_discovery": "NET-003",
+                "check_software_inventory": "NET-005",
+                "check_vulnerabilities": "VULN-001",
             }
 
             # Resolve the expected ID before executing the check.

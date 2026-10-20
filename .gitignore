@@ -225,3 +225,8 @@ reports/*
 
 # Ignore generated security reports.
 reports/*.json
+
+# Local scan output
+scan_output.txt
+# Local scan output
+scan_output.txt

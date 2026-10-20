@@ -41,7 +41,7 @@ from datetime import datetime, timezone
 from core.scanner import Scanner
 
 # Reporter saves security assessments as JSON files.
-from core.reporter import save_report
+from core.reporter import save_report, save_html_report
 
 # Correlator combines independent findings to identify
 # compound security risks.
@@ -60,6 +60,9 @@ from core.findings import Finding
 
 # Prioritize TCP exposure based on firewall rules, network
 from core.exposure_prioritizer import prioritize_exposure
+
+# Calculate the overall security score based on findings and baseline results.
+from core.scoring import calculate_score
 
 # ------------------------------------------------------------
 # WINDOWS SECURITY CHECKS
@@ -107,6 +110,12 @@ from checks.defender import check_defender
 
 # Network discovery check to identify network interfaces and addresses.
 from checks.network_discovery import check_network_discovery
+
+# Software inventory check to enumerate installed applications and versions.
+from checks.software_inventory import check_software_inventory
+
+# Vulnerability assessment check to identify known vulnerabilities.
+from checks.vulnerability import check_vulnerabilities
 
 # ============================================================
 # FUNCTION: GET SYSTEM INFORMATION
@@ -174,6 +183,8 @@ def main() -> None:
     scanner.register(check_bitlocker)
     scanner.register(check_defender)
     scanner.register(check_network_discovery)
+    scanner.register(check_software_inventory)
+    scanner.register(check_vulnerabilities)
   
     # --------------------------------------------------------
     # STEP 2: EXECUTE SECURITY CHECKS
@@ -311,7 +322,10 @@ def main() -> None:
         "findings": finding_results,
 
         # Assessment against the configured security policy.
-        "baseline": baseline_results
+        "baseline": baseline_results,
+
+        # Calculate the security posture score from the findings.
+        "security_score": calculate_score(findings)
     }
 
     # --------------------------------------------------------
@@ -334,10 +348,10 @@ def main() -> None:
     # The reporter generates a timestamped filename so
     # previous assessments are not overwritten.
     report_path = save_report(report)
+    html_path = save_html_report(report, report_path)
 
-    # Confirm the output location to the user.
-    print(f"\nReport saved to: {report_path}")
-
+    print(f"\nJSON report saved to: {report_path}")
+    print(f"HTML report saved to: {html_path}")
 
 # ============================================================
 # APPLICATION ENTRY POINT

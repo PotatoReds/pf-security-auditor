@@ -1,32 +1,45 @@
+
 {
+    "_comment": "Pathfinder's custom Windows 11 security baseline. This is a project-defined policy, not an official CIS benchmark.",
+
     "baseline_name": "Pathfinder Windows 11 Baseline",
     "baseline_version": "0.1",
+
+    "_rules_comment": "Each rule identifies a security check, its required status, the severity of non-compliance, and the security requirement.",
+
     "rules": [
         {
+            "_comment": "Windows Firewall should be enabled for all three network profiles.",
             "check_id": "FW-001",
             "required_status": "PASS",
             "severity": "HIGH",
             "description": "All Windows Firewall profiles must be enabled."
         },
         {
+            "_comment": "SMBv1 is an obsolete file-sharing protocol with significant security weaknesses.",
             "check_id": "SMB-001",
             "required_status": "PASS",
             "severity": "HIGH",
-            "description": "SMBv1 server support must be disabled."
+            "description": "SMBv1 server support must be disabled.",
+            "evidence_field": "server.EnableSMB1Protocol",
+            "expected_value": false
         },
         {
+            "_comment": "Remote Desktop must either be disabled or meet the security conditions checked by RDP-001.",
             "check_id": "RDP-001",
             "required_status": "PASS",
             "severity": "HIGH",
             "description": "Remote Desktop must be disabled or configured securely."
         },
         {
+            "_comment": "User Account Control helps restrict administrative elevation.",
             "check_id": "UAC-001",
             "required_status": "PASS",
             "severity": "MEDIUM",
             "description": "User Account Control must be configured securely."
         },
         {
+            "_comment": "Disk encryption reduces exposure of stored data following device loss or theft.",
             "check_id": "BL-001",
             "required_status": "PASS",
             "severity": "MEDIUM",
